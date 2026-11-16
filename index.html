@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UPA e UBS mais próxima</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+
+<style>
+  :root {
+    --bg: #f2f5f4;
+    --surface: #ffffff;
+    --ink: #16302b;
+    --muted: #54706a;
+    --line: #d3dedb;
+    --upa: #c4322a;
+    --ubs: #1d6db5;
+    --you: #16302b;
+    --focus: #f2a900;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1c19;
+      --surface: #172723;
+      --surface: #172723;
+      --ink: #e8f1ef;
+      --muted: #9db8b2;
+      --line: #2b413c;
+      --upa: #ff6b61;
+      --ubs: #6ab4ff;
+      --you: #e8f1ef;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: "Atkinson Hyperlegible", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+  .app {
+    display: grid;
+    grid-template-columns: 400px 1fr;
+    height: 100%;
+  }
+
+  /* ---------- painel ---------- */
+  .panel {
+    padding: 28px 24px;
+    overflow-y: auto;
+    border-right: 1px solid var(--line);
+    background: var(--bg);
+  }
+  h1 {
+    font-size: 1.9rem;
+    line-height: 1.15;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  .lead { margin: 0 0 20px; color: var(--muted); }
+
+  .btn {
+    font: inherit;
+    font-weight: 700;
+    width: 100%;
+    padding: 14px 18px;
+    border: 0;
+    border-radius: var(--radius);
+    background: var(--ink);
+    color: var(--bg);
+    cursor: pointer;
+  }
+  .btn:hover { filter: brightness(1.15); }
+  .btn:disabled { opacity: .6; cursor: progress; }
+
+  .ou { display: flex; align-items: center; gap: 12px; margin: 16px 0; color: var(--muted); font-size: .9rem; }
+  .ou::before, .ou::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .busca label { display: block; font-size: .9rem; color: var(--muted); margin-bottom: 6px; }
+  .busca .linha { display: flex; gap: 8px; }
+  .busca input[type="search"] {
+    flex: 1; min-width: 0;
+    font: inherit;
+    padding: 12px 14px;
+    border: 2px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .busca input[type="search"]:focus-visible { border-color: var(--ink); }
+  .busca .btn { width: auto; padding: 12px 18px; }
+
+  .filters {
+    display: flex;
+    gap: 8px;
+    margin: 16px 0 0;
+    padding: 0;
+    border: 0;
+  }
+  .filters legend { font-size: .9rem; color: var(--muted); margin-bottom: 6px; padding: 0; }
+  .filters label {
+    flex: 1;
+    text-align: center;
+    padding: 9px 6px;
+    border: 2px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    cursor: pointer;
+    font-weight: 700;
+    font-size: .95rem;
+  }
+  .filters input { position: absolute; opacity: 0; pointer-events: none; }
+  .filters input:checked + span { color: var(--bg); }
+  .filters label:has(input:checked) { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+  .filters label:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+  .status { min-height: 1.5em; margin: 14px 0 0; color: var(--muted); font-size: .95rem; }
+  .status.error { color: var(--upa); font-weight: 700; }
+
+  /* ---------- resultado principal ---------- */
+  .nearest {
+    margin-top: 18px;
+    padding: 18px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 8px solid var(--ink);
+    border-radius: var(--radius);
+  }
+  .nearest[hidden] { display: none; }
+  .nearest.tipo-upa { border-left-color: var(--upa); }
+  .nearest.tipo-ubs { border-left-color: var(--ubs); }
+  .tag {
+    display: inline-block;
+    font-weight: 700;
+    font-size: .85rem;
+    padding: 2px 10px;
+    border-radius: 99px;
+    color: #fff;
+    background: var(--ink);
+  }
+  .tipo-upa .tag { background: #c4322a; }
+  .tipo-ubs .tag { background: #1d6db5; }
+  .nearest h2 { margin: 10px 0 2px; font-size: 1.35rem; line-height: 1.25; }
+  .dist { font-size: 2rem; font-weight: 700; margin: 6px 0 2px; }
+  .addr { color: var(--muted); margin: 0 0 14px; font-size: .95rem; }
+  .route {
+    display: inline-block;
+    padding: 10px 16px;
+    border-radius: var(--radius);
+    border: 2px solid var(--ink);
+    color: var(--ink);
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .route:hover { background: var(--ink); color: var(--bg); }
+
+  /* ---------- lista ---------- */
+  .others { margin-top: 22px; }
+  .others h3 { font-size: 1rem; margin: 0 0 8px; }
+  .others ul { list-style: none; margin: 0; padding: 0; }
+  .others li { margin-bottom: 6px; }
+  .others button {
+    font: inherit;
+    width: 100%;
+    text-align: left;
+    display: grid;
+    grid-template-columns: 14px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 12px;
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .others button:hover { border-color: var(--ink); }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--ink); }
+  .dot.upa { background: var(--upa); }
+  .dot.ubs { background: var(--ubs); }
+  .others .km { color: var(--muted); font-size: .9rem; white-space: nowrap; }
+
+  .emergency {
+    margin-top: 24px;
+    padding: 12px 14px;
+    border: 2px solid var(--upa);
+    border-radius: var(--radius);
+    font-size: .95rem;
+  }
+  .credit { margin: 18px 0 0; font-size: .8rem; color: var(--muted); }
+
+  /* ---------- mapa ---------- */
+  #map { height: 100%; min-height: 320px; background: #dfe7e4; }
+
+  .pin {
+    width: 30px; height: 30px;
+    border-radius: 50% 50% 50% 0;
+    transform: rotate(-45deg);
+    border: 3px solid #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+  }
+  .pin.upa { background: #c4322a; }
+  .pin.ubs { background: #1d6db5; }
+  .pin.big { width: 40px; height: 40px; }
+  .you {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: #16302b;
+    border: 3px solid #fff;
+    box-shadow: 0 0 0 6px rgba(22,48,43,.25);
+  }
+
+  @media (max-width: 800px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: auto 55vh; height: auto; }
+    html, body { height: auto; }
+    .panel { border-right: 0; overflow: visible; }
+    #map { height: 55vh; }
+  }
+</style>
+</head>
+
+<body>
+<div class="app">
+  <section class="panel" aria-labelledby="titulo">
+    <h1 id="titulo">Unidade de saúde mais próxima</h1>
+    <p class="lead">Encontre a UPA ou a UBS mais perto de onde você está agora.</p>
+
+    <button class="btn" id="buscar" type="button">Usar minha localização</button>
+
+    <div class="ou">ou</div>
+
+    <form class="busca" id="form-bairro" role="search">
+      <label for="bairro">Buscar por bairro ou endereço</label>
+      <div class="linha">
+        <input type="search" id="bairro" name="bairro" placeholder="Ex.: Vila Mariana, São Paulo" autocomplete="off" required>
+        <button class="btn" id="btn-bairro" type="submit">Buscar</button>
+      </div>
+    </form>
+
+    <fieldset class="filters">
+      <legend>Mostrar</legend>
+      <label><input type="radio" name="tipo" value="todos" checked><span>UPA e UBS</span></label>
+      <label><input type="radio" name="tipo" value="upa"><span>Só UPA</span></label>
+      <label><input type="radio" name="tipo" value="ubs"><span>Só UBS</span></label>
+    </fieldset>
+
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+
+    <article class="nearest" id="nearest" hidden>
+      <span class="tag" id="n-tipo"></span>
+      <h2 id="n-nome"></h2>
+      <p class="dist" id="n-dist"></p>
+      <p class="addr" id="n-end"></p>
+      <a class="route" id="n-rota" target="_blank" rel="noopener">Traçar rota</a>
+    </article>
+
+    <div class="others" id="others" hidden>
+      <h3>Outras unidades por perto</h3>
+      <ul id="lista"></ul>
+    </div>
+
+    <p class="emergency"><strong>Emergência?</strong> Ligue para o SAMU no <strong>192</strong>. Não espere chegar a uma unidade.</p>
+    <p class="credit">Dados e busca de endereços do OpenStreetMap. A lista pode estar incompleta, confirme o funcionamento da unidade antes de ir.</p>
+  </section>
+
+  <div id="map" role="application" aria-label="Mapa com as unidades de saúde"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+  // ---------- configuração ----------
+  const RAIOS_KM = [3, 8, 20];             // busca em círculos cada vez maiores
+  const OVERPASS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter"
+  ];
+
+  // ---------- elementos ----------
+  const $ = (id) => document.getElementById(id);
+  const btn = $("buscar"), statusEl = $("status");
+
+  // ---------- mapa (centrado em São Paulo até ter a localização) ----------
+  const map = L.map("map").setView([-23.55, -46.63], 11);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; colaboradores do OpenStreetMap"
+  }).addTo(map);
+
+  let camada = L.layerGroup().addTo(map);
+  let posicao = null;      // {lat, lon}
+  let rotuloOrigem = "Você está aqui";
+  let unidades = [];       // todas as unidades encontradas, já com distância
+  let marcadores = new Map();
+
+  const iconePin = (tipo, grande) => L.divIcon({
+    className: "",
+    html: `<div class="pin ${tipo} ${grande ? "big" : ""}"></div>`,
+    iconSize: grande ? [40, 40] : [30, 30],
+    iconAnchor: grande ? [20, 40] : [15, 30]
+  });
+  const iconeVoce = L.divIcon({ className: "", html: '<div class="you"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
+
+  // ---------- utilidades ----------
+  function mensagem(texto, erro = false) {
+    statusEl.textContent = texto;
+    statusEl.classList.toggle("error", erro);
+  }
+
+  function distanciaKm(a, b) {            // fórmula de haversine
+    const R = 6371, rad = (x) => x * Math.PI / 180;
+    const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+    const h = Math.sin(dLat / 2) ** 2 +
+              Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  const formatarDist = (km) => km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1).replace(".", ",")} km`;
+
+  function classificar(nome) {
+    if (/\bUPA\b|pronto[\s-]*atendimento|unidade de pronto/i.test(nome)) return "upa";
+    if (/\bUBS\b|\bUSF\b|unidade b[áa]sica|posto de sa[úu]de|\bAMA\b/i.test(nome)) return "ubs";
+    return null;
+  }
+
+  function endereco(tags) {
+    const partes = [
+      [tags["addr:street"], tags["addr:housenumber"]].filter(Boolean).join(", "),
+      tags["addr:suburb"] || tags["addr:neighbourhood"],
+      tags["addr:city"]
+    ].filter(Boolean);
+    return partes.join(" - ") || "Endereço não informado no mapa";
+  }
+
+  // ---------- busca no OpenStreetMap (Overpass) ----------
+  async function consultar(lat, lon, raioKm) {
+    const r = raioKm * 1000;
+    const consulta = `[out:json][timeout:25];
+      nwr(around:${r},${lat},${lon})["name"~"UPA|UBS|USF|Unidade B.sica|Pronto.Atendimento|Unidade de Pronto|Posto de Sa.de",i];
+      out center tags;`;
+    let ultimoErro;
+    for (const url of OVERPASS) {
+      try {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "data=" + encodeURIComponent(consulta)
+        });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        return (await resp.json()).elements;
+      } catch (e) { ultimoErro = e; }
+    }
+    throw ultimoErro;
+  }
+
+  async function buscarUnidades(lat, lon) {
+    for (const raio of RAIOS_KM) {
+      mensagem(`Procurando unidades em até ${raio} km...`);
+      const elementos = await consultar(lat, lon, raio);
+      const achadas = elementos.map((el) => {
+        const tags = el.tags || {};
+        const nome = tags.name || "";
+        const tipo = classificar(nome);
+        const pos = { lat: el.lat ?? el.center?.lat, lon: el.lon ?? el.center?.lon };
+        if (!tipo || pos.lat == null) return null;
+        return { id: el.type + el.id, nome, tipo, ...pos, end: endereco(tags), km: distanciaKm({ lat, lon }, pos) };
+      }).filter(Boolean);
+
+      // remove duplicados (mesmo nome quase no mesmo lugar)
+      const vistos = new Set();
+      const unicas = achadas.filter((u) => {
+        const chave = u.nome.toLowerCase() + u.lat.toFixed(3) + u.lon.toFixed(3);
+        if (vistos.has(chave)) return false;
+        vistos.add(chave); return true;
+      });
+      if (unicas.length) return unicas.sort((a, b) => a.km - b.km);
+    }
+    return [];
+  }
+
+  // ---------- exibição ----------
+  function tipoFiltro() { return document.querySelector('input[name="tipo"]:checked').value; }
+
+  function desenhar() {
+    camada.clearLayers();
+    marcadores.clear();
+    L.marker([posicao.lat, posicao.lon], { icon: iconeVoce, title: rotuloOrigem, keyboard: false }).addTo(camada);
+
+    const filtro = tipoFiltro();
+    const visiveis = unidades.filter((u) => filtro === "todos" || u.tipo === filtro);
+
+    if (!visiveis.length) {
+      $("nearest").hidden = true;
+      $("others").hidden = true;
+      mensagem(`Nenhuma ${filtro.toUpperCase()} encontrada num raio de ${RAIOS_KM.at(-1)} km. Tente "UPA e UBS".`, true);
+      map.setView([posicao.lat, posicao.lon], 14);
+      return;
+    }
+
+    const mais = visiveis[0];
+    visiveis.slice(0, 8).forEach((u, i) => {
+      const m = L.marker([u.lat, u.lon], { icon: iconePin(u.tipo, i === 0), title: u.nome, zIndexOffset: i === 0 ? 1000 : 0 })
+        .addTo(camada)
+        .bindPopup(`<strong>${escapar(u.nome)}</strong><br>${u.tipo.toUpperCase()} · ${formatarDist(u.km)}`);
+      marcadores.set(u.id, m);
+    });
+
+    // mais próxima
+    const card = $("nearest");
+    card.hidden = false;
+    card.className = "nearest tipo-" + mais.tipo;
+    $("n-tipo").textContent = mais.tipo.toUpperCase();
+    $("n-nome").textContent = mais.nome;
+    $("n-dist").textContent = formatarDist(mais.km);
+    $("n-end").textContent = mais.end;
+    $("n-rota").href = `https://www.google.com/maps/dir/?api=1&origin=${posicao.lat},${posicao.lon}&destination=${mais.lat},${mais.lon}`;
+
+    // outras
+    const lista = $("lista");
+    lista.innerHTML = "";
+    visiveis.slice(1, 6).forEach((u) => {
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.type = "button";
+      b.innerHTML = `<span class="dot ${u.tipo}"></span><span>${escapar(u.nome)}</span><span class="km">${formatarDist(u.km)}</span>`;
+      b.addEventListener("click", () => {
+        map.flyTo([u.lat, u.lon], 16);
+        marcadores.get(u.id)?.openPopup();
+      });
+      li.appendChild(b);
+      lista.appendChild(li);
+    });
+    $("others").hidden = visiveis.length < 2;
+
+    mensagem("");
+    marcadores.get(mais.id).openPopup();
+    map.fitBounds(L.latLngBounds([[posicao.lat, posicao.lon], [mais.lat, mais.lon]]), { padding: [60, 60], maxZoom: 16 });
+  }
+
+  function escapar(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  // ---------- fluxo principal ----------
+  async function executarBusca(lat, lon, rotulo) {
+    posicao = { lat, lon };
+    rotuloOrigem = rotulo;
+    btn.disabled = true;
+    $("btn-bairro").disabled = true;
+    try {
+      unidades = await buscarUnidades(lat, lon);
+      if (!unidades.length) {
+        camada.clearLayers();
+        $("nearest").hidden = true;
+        $("others").hidden = true;
+        L.marker([lat, lon], { icon: iconeVoce, title: rotulo }).addTo(camada);
+        map.setView([lat, lon], 13);
+        mensagem(`Não encontramos UPA ou UBS num raio de ${RAIOS_KM.at(-1)} km.`, true);
+      } else {
+        desenhar();
+      }
+    } catch (e) {
+      mensagem("Não foi possível buscar as unidades agora. Verifique a internet e tente de novo.", true);
+    } finally {
+      btn.disabled = false;
+      $("btn-bairro").disabled = false;
+    }
+  }
+
+  function localizar() {
+    if (!("geolocation" in navigator)) {
+      mensagem("Seu navegador não permite obter a localização.", true);
+      return;
+    }
+    btn.disabled = true;
+    mensagem("Obtendo sua localização...");
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => executarBusca(pos.coords.latitude, pos.coords.longitude, "Você está aqui"),
+      (erro) => {
+        btn.disabled = false;
+        const motivos = {
+          1: "Permissão negada. Libere a localização nas configurações do navegador ou busque pelo bairro.",
+          2: "Não foi possível determinar onde você está. Tente buscar pelo bairro.",
+          3: "A localização demorou demais. Tente de novo ou busque pelo bairro."
+        };
+        mensagem(motivos[erro.code] || "Erro ao obter a localização.", true);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+    );
+  }
+
+  // ---------- busca por bairro (geocodificação via Nominatim) ----------
+  async function buscarPorBairro(texto) {
+    mensagem(`Procurando "${texto}"...`);
+    $("btn-bairro").disabled = true;
+    try {
+      const url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&accept-language=pt-BR&q=" +
+                  encodeURIComponent(texto);
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const resultados = await resp.json();
+      if (!resultados.length) {
+        mensagem("Não encontramos esse local. Tente incluir a cidade, por exemplo: Vila Mariana, São Paulo.", true);
+        $("btn-bairro").disabled = false;
+        return;
+      }
+      const r = resultados[0];
+      const rotulo = "Região buscada: " + r.display_name.split(",").slice(0, 2).join(",").trim();
+      await executarBusca(parseFloat(r.lat), parseFloat(r.lon), rotulo);
+    } catch (e) {
+      mensagem("Não foi possível buscar esse local agora. Verifique a internet e tente de novo.", true);
+      $("btn-bairro").disabled = false;
+    }
+  }
+
+  $("form-bairro").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const texto = $("bairro").value.trim();
+    if (texto) buscarPorBairro(texto);
+  });
+
+  btn.addEventListener("click", localizar);
+  document.querySelectorAll('input[name="tipo"]').forEach((r) =>
+    r.addEventListener("change", () => { if (posicao && unidades.length) desenhar(); })
+  );
+</script>
+</body>
+</html>
