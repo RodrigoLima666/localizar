@@ -3,11 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>UPA e UBS mais próxima (Google Maps)</title>
+<title>UPA e UBS mais próxima</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 
 <style>
   :root {
@@ -267,96 +268,63 @@
     </div>
 
     <p class="emergency"><strong>Emergência?</strong> Ligue para o SAMU no <strong>192</strong>. Não espere chegar a uma unidade.</p>
-    <p class="credit">Dados do Google Maps. A lista pode estar incompleta, confirme o funcionamento da unidade antes de ir.</p>
+    <p class="credit">Dados e busca de endereços do OpenStreetMap. A lista pode estar incompleta, confirme o funcionamento da unidade antes de ir.</p>
   </section>
 
   <div id="map" role="application" aria-label="Mapa com as unidades de saúde"></div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
-  // =====================================================================
-  //  COLE AQUI A SUA CHAVE DA API DO GOOGLE MAPS
-  //  Ative no Google Cloud: Maps JavaScript API, Places API (New) e Geocoding API
-  // =====================================================================
-  const GOOGLE_MAPS_API_KEY = "AIzaSyDqwAgYvCR1WPmA3RZBpz_jQ6CeKEOTdCA";
-
   // ---------- configuração ----------
-  const RAIOS_KM = [5, 15, 30];
+  const RAIOS_KM = [3, 8, 20];             // busca em círculos cada vez maiores
   // Caixa aproximada do município de São Paulo (oeste, norte, leste, sul)
   const SP = { oeste: -46.826, norte: -23.356, leste: -46.365, sul: -24.008 };
   const dentroDeSP = (lat, lon) => lat <= SP.norte && lat >= SP.sul && lon >= SP.oeste && lon <= SP.leste;
+  const OVERPASS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter"
+  ];
 
   // ---------- elementos ----------
   const $ = (id) => document.getElementById(id);
   const btn = $("buscar"), statusEl = $("status");
 
-  let map, InfoWindow, AdvancedMarkerElement, Place, geocoder, janela;
-  let marcas = [];
-  let posicao = null;
+  // ---------- mapa (centrado em São Paulo até ter a localização) ----------
+  const map = L.map("map").setView([-23.55, -46.63], 11);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; colaboradores do OpenStreetMap"
+  }).addTo(map);
+
+  let camada = L.layerGroup().addTo(map);
+  let posicao = null;      // {lat, lon}
   let rotuloOrigem = "Você está aqui";
-  let unidades = [];
+  let unidades = [];       // todas as unidades encontradas, já com distância
   let marcadores = new Map();
 
+  const iconePin = (tipo, grande) => L.divIcon({
+    className: "",
+    html: `<div class="pin ${tipo} ${grande ? "big" : ""}"></div>`,
+    iconSize: grande ? [40, 40] : [30, 30],
+    iconAnchor: grande ? [20, 40] : [15, 30]
+  });
+  const iconeVoce = L.divIcon({ className: "", html: '<div class="you"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
+
+  // ---------- utilidades ----------
   function mensagem(texto, erro = false) {
     statusEl.textContent = texto;
     statusEl.classList.toggle("error", erro);
   }
 
-  function escapar(s) {
-    return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  }
-
-  // ---------- carregar o Google Maps ----------
-  function carregarGoogle() {
-    return new Promise((resolve, reject) => {
-      window.__mapsPronto = resolve;
-      window.gm_authFailure = () =>
-        mensagem("A chave do Google Maps foi recusada. Confira a chave e se as APIs estão ativadas.", true);
-      const sc = document.createElement("script");
-      sc.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(GOOGLE_MAPS_API_KEY) +
-               "&v=weekly&loading=async&language=pt-BR&region=BR&callback=__mapsPronto";
-      sc.onerror = reject;
-      document.head.appendChild(sc);
-    });
-  }
-
-  async function iniciar() {
-    if (GOOGLE_MAPS_API_KEY === "SUA_CHAVE_AQUI") {
-      mensagem("Falta colocar a chave da API do Google Maps no início do script.", true);
-      return;
-    }
-    try {
-      await carregarGoogle();
-      const { Map } = await google.maps.importLibrary("maps");
-      ({ InfoWindow } = await google.maps.importLibrary("maps"));
-      ({ AdvancedMarkerElement } = await google.maps.importLibrary("marker"));
-      ({ Place } = await google.maps.importLibrary("places"));
-      const { Geocoder } = await google.maps.importLibrary("geocoding");
-      geocoder = new Geocoder();
-      map = new Map($("map"), {
-        center: { lat: -23.55, lng: -46.63 },
-        zoom: 11,
-        mapId: "DEMO_MAP_ID",
-        clickableIcons: false,
-        streetViewControl: false,
-        mapTypeControl: false
-      });
-      janela = new InfoWindow();
-      btn.disabled = false;
-      $("btn-bairro").disabled = false;
-    } catch (e) {
-      mensagem("Não foi possível carregar o Google Maps. Verifique a internet e a chave da API.", true);
-    }
-  }
-
-  // ---------- utilidades ----------
-  function distanciaKm(a, b) {
+  function distanciaKm(a, b) {            // fórmula de haversine
     const R = 6371, rad = (x) => x * Math.PI / 180;
     const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
     const h = Math.sin(dLat / 2) ** 2 +
               Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
     return 2 * R * Math.asin(Math.sqrt(h));
   }
+
   const formatarDist = (km) => km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1).replace(".", ",")} km`;
 
   function classificar(nome) {
@@ -365,60 +333,58 @@
     return null;
   }
 
-  const emSaoPaulo = (end) => /S[ãa]o Paulo\s*-\s*SP/i.test(end || "");
-
-  // ---------- marcadores ----------
-  function elementoPin(tipo, grande) {
-    const d = document.createElement("div");
-    d.className = `pin ${tipo} ${grande ? "big" : ""}`;
-    return d;
-  }
-  function elementoVoce() {
-    const d = document.createElement("div");
-    d.className = "you";
-    return d;
-  }
-  function limparMapa() {
-    marcas.forEach((m) => (m.map = null));
-    marcas = [];
-    marcadores.clear();
-    janela.close();
-  }
-  function abrirJanela(u) {
-    janela.setContent(`<strong>${escapar(u.nome)}</strong><br>${u.tipo.toUpperCase()} · ${formatarDist(u.km)}`);
-    janela.open({ map, anchor: marcadores.get(u.id) });
+  function endereco(tags) {
+    const partes = [
+      [tags["addr:street"], tags["addr:housenumber"]].filter(Boolean).join(", "),
+      tags["addr:suburb"] || tags["addr:neighbourhood"],
+      tags["addr:city"]
+    ].filter(Boolean);
+    return partes.join(" - ") || "Endereço não informado no mapa";
   }
 
-  // ---------- busca de unidades (Places API) ----------
+  // ---------- busca no OpenStreetMap (Overpass) ----------
+  async function consultar(lat, lon, raioKm) {
+    const r = raioKm * 1000;
+    const consulta = `[out:json][timeout:25];
+      area["boundary"="administrative"]["admin_level"="8"]["wikidata"="Q174"]->.sp;
+      nwr(area.sp)(around:${r},${lat},${lon})["name"~"UPA|UBS|USF|Unidade B.sica|Pronto.Atendimento|Unidade de Pronto|Posto de Sa.de",i];
+      out center tags;`;
+    let ultimoErro;
+    for (const url of OVERPASS) {
+      try {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "data=" + encodeURIComponent(consulta)
+        });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        return (await resp.json()).elements;
+      } catch (e) { ultimoErro = e; }
+    }
+    throw ultimoErro;
+  }
+
   async function buscarUnidades(lat, lon) {
     for (const raio of RAIOS_KM) {
       mensagem(`Procurando unidades em até ${raio} km...`);
-      const consultas = ["UPA Unidade de Pronto Atendimento", "UBS Unidade Básica de Saúde"];
-      const respostas = await Promise.all(consultas.map((q) =>
-        Place.searchByText({
-          textQuery: q,
-          fields: ["id", "displayName", "location", "formattedAddress"],
-          locationBias: { center: { lat, lng: lon }, radius: raio * 1000 },
-          maxResultCount: 20,
-          language: "pt-BR",
-          region: "br"
-        }).then((r) => r.places).catch(() => [])
-      ));
-
-      const vistos = new Set();
-      const achadas = [];
-      for (const p of respostas.flat()) {
-        if (vistos.has(p.id)) continue;
-        vistos.add(p.id);
-        const nome = p.displayName || "";
+      const elementos = await consultar(lat, lon, raio);
+      const achadas = elementos.map((el) => {
+        const tags = el.tags || {};
+        const nome = tags.name || "";
         const tipo = classificar(nome);
-        if (!tipo || !emSaoPaulo(p.formattedAddress)) continue;
-        const pos = { lat: p.location.lat(), lon: p.location.lng() };
-        const km = distanciaKm({ lat, lon }, pos);
-        if (km > raio) continue;
-        achadas.push({ id: p.id, nome, tipo, ...pos, end: p.formattedAddress.replace(/, Brasil$/, ""), km });
-      }
-      if (achadas.length) return achadas.sort((a, b) => a.km - b.km);
+        const pos = { lat: el.lat ?? el.center?.lat, lon: el.lon ?? el.center?.lon };
+        if (!tipo || pos.lat == null) return null;
+        return { id: el.type + el.id, nome, tipo, ...pos, end: endereco(tags), km: distanciaKm({ lat, lon }, pos) };
+      }).filter(Boolean);
+
+      // remove duplicados (mesmo nome quase no mesmo lugar)
+      const vistos = new Set();
+      const unicas = achadas.filter((u) => {
+        const chave = u.nome.toLowerCase() + u.lat.toFixed(3) + u.lon.toFixed(3);
+        if (vistos.has(chave)) return false;
+        vistos.add(chave); return true;
+      });
+      if (unicas.length) return unicas.sort((a, b) => a.km - b.km);
     }
     return [];
   }
@@ -427,10 +393,9 @@
   function tipoFiltro() { return document.querySelector('input[name="tipo"]:checked').value; }
 
   function desenhar() {
-    limparMapa();
-    marcas.push(new AdvancedMarkerElement({
-      map, position: { lat: posicao.lat, lng: posicao.lon }, content: elementoVoce(), title: rotuloOrigem, zIndex: 1
-    }));
+    camada.clearLayers();
+    marcadores.clear();
+    L.marker([posicao.lat, posicao.lon], { icon: iconeVoce, title: rotuloOrigem, keyboard: false }).addTo(camada);
 
     const filtro = tipoFiltro();
     const visiveis = unidades.filter((u) => filtro === "todos" || u.tipo === filtro);
@@ -439,21 +404,19 @@
       $("nearest").hidden = true;
       $("others").hidden = true;
       mensagem(`Nenhuma ${filtro.toUpperCase()} encontrada num raio de ${RAIOS_KM.at(-1)} km. Tente "UPA e UBS".`, true);
-      map.setCenter({ lat: posicao.lat, lng: posicao.lon });
-      map.setZoom(14);
+      map.setView([posicao.lat, posicao.lon], 14);
       return;
     }
 
     const mais = visiveis[0];
     visiveis.slice(0, 8).forEach((u, i) => {
-      const m = new AdvancedMarkerElement({
-        map, position: { lat: u.lat, lng: u.lon }, content: elementoPin(u.tipo, i === 0), title: u.nome, zIndex: i === 0 ? 10 : 2
-      });
-      m.addListener("click", () => abrirJanela(u));
+      const m = L.marker([u.lat, u.lon], { icon: iconePin(u.tipo, i === 0), title: u.nome, zIndexOffset: i === 0 ? 1000 : 0 })
+        .addTo(camada)
+        .bindPopup(`<strong>${escapar(u.nome)}</strong><br>${u.tipo.toUpperCase()} · ${formatarDist(u.km)}`);
       marcadores.set(u.id, m);
-      marcas.push(m);
     });
 
+    // mais próxima
     const card = $("nearest");
     card.hidden = false;
     card.className = "nearest tipo-" + mais.tipo;
@@ -461,8 +424,9 @@
     $("n-nome").textContent = mais.nome;
     $("n-dist").textContent = formatarDist(mais.km);
     $("n-end").textContent = mais.end;
-    $("n-rota").href = `https://www.google.com/maps/dir/?api=1&origin=${posicao.lat},${posicao.lon}&destination=${mais.lat},${mais.lon}&destination_place_id=${encodeURIComponent(mais.id)}`;
+    $("n-rota").href = `https://www.google.com/maps/dir/?api=1&origin=${posicao.lat},${posicao.lon}&destination=${mais.lat},${mais.lon}`;
 
+    // outras
     const lista = $("lista");
     lista.innerHTML = "";
     visiveis.slice(1, 6).forEach((u) => {
@@ -471,9 +435,8 @@
       b.type = "button";
       b.innerHTML = `<span class="dot ${u.tipo}"></span><span>${escapar(u.nome)}</span><span class="km">${formatarDist(u.km)}</span>`;
       b.addEventListener("click", () => {
-        map.panTo({ lat: u.lat, lng: u.lon });
-        map.setZoom(16);
-        abrirJanela(u);
+        map.flyTo([u.lat, u.lon], 16);
+        marcadores.get(u.id)?.openPopup();
       });
       li.appendChild(b);
       lista.appendChild(li);
@@ -481,11 +444,12 @@
     $("others").hidden = visiveis.length < 2;
 
     mensagem("");
-    abrirJanela(mais);
-    const limites = new google.maps.LatLngBounds();
-    limites.extend({ lat: posicao.lat, lng: posicao.lon });
-    limites.extend({ lat: mais.lat, lng: mais.lon });
-    map.fitBounds(limites, 70);
+    marcadores.get(mais.id).openPopup();
+    map.fitBounds(L.latLngBounds([[posicao.lat, posicao.lon], [mais.lat, mais.lon]]), { padding: [60, 60], maxZoom: 16 });
+  }
+
+  function escapar(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
   // ---------- fluxo principal ----------
@@ -497,12 +461,11 @@
     try {
       unidades = await buscarUnidades(lat, lon);
       if (!unidades.length) {
-        limparMapa();
+        camada.clearLayers();
         $("nearest").hidden = true;
         $("others").hidden = true;
-        marcas.push(new AdvancedMarkerElement({ map, position: { lat, lng: lon }, content: elementoVoce(), title: rotulo }));
-        map.setCenter({ lat, lng: lon });
-        map.setZoom(13);
+        L.marker([lat, lon], { icon: iconeVoce, title: rotulo }).addTo(camada);
+        map.setView([lat, lon], 13);
         mensagem(`Não encontramos UPA ou UBS num raio de ${RAIOS_KM.at(-1)} km.`, true);
       } else {
         desenhar();
@@ -522,6 +485,7 @@
     }
     btn.disabled = true;
     mensagem("Obtendo sua localização...");
+
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
@@ -539,49 +503,53 @@
           2: "Não foi possível determinar onde você está. Tente buscar pelo bairro.",
           3: "A localização demorou demais. Tente de novo ou busque pelo bairro."
         };
-        mensagem(motivos[erro.code] || "Erro ao obter a localização.", true);
+        let texto = motivos[erro.code] || "Erro ao obter a localização.";
+        if (location.protocol === "file:") {
+          texto += " Você abriu o arquivo direto do computador, o que costuma bloquear a localização. Abra por http://localhost ou publique em https.";
+        }
+        console.error("Erro de geolocalização:", erro.code, erro.message);
+        mensagem(texto + " (código " + erro.code + ")", true);
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+      { enableHighAccuracy: false, timeout: 20000, maximumAge: 300000 }
     );
   }
 
-  // ---------- busca por bairro (Geocoding API) ----------
+  // ---------- busca por bairro (geocodificação via Nominatim) ----------
   async function buscarPorBairro(texto) {
     mensagem(`Procurando "${texto}"...`);
     $("btn-bairro").disabled = true;
     try {
-      const { results } = await geocoder.geocode({
-        address: /s[ãa]o paulo/i.test(texto) ? texto : texto + ", São Paulo",
-        componentRestrictions: { country: "BR", locality: "São Paulo" },
-        bounds: { west: SP.oeste, north: SP.norte, east: SP.leste, south: SP.sul },
-        region: "br"
-      });
-      const loc = results[0].geometry.location;
-      const rotulo = "Região buscada: " + results[0].formatted_address.split(",").slice(0, 2).join(",").trim();
-      await executarBusca(loc.lat(), loc.lng(), rotulo);
-    } catch (e) {
-      $("btn-bairro").disabled = false;
-      if (e && e.code === "ZERO_RESULTS") {
+      const consultaTexto = /s[ãa]o paulo/i.test(texto) ? texto : texto + ", São Paulo";
+      const caixa = `${SP.oeste},${SP.norte},${SP.leste},${SP.sul}`;   // esquerda, topo, direita, base
+      const url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&accept-language=pt-BR" +
+                  `&viewbox=${caixa}&bounded=1&q=` + encodeURIComponent(consultaTexto);
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const resultados = await resp.json();
+      if (!resultados.length) {
         mensagem("Não encontramos esse local na cidade de São Paulo. Confira o nome do bairro ou da rua.", true);
-      } else {
-        mensagem("Não foi possível buscar esse local agora. Verifique a internet e a chave da API.", true);
+        $("btn-bairro").disabled = false;
+        return;
       }
+      const r = resultados[0];
+      const rotulo = "Região buscada: " + r.display_name.split(",").slice(0, 2).join(",").trim();
+      await executarBusca(parseFloat(r.lat), parseFloat(r.lon), rotulo);
+    } catch (e) {
+      mensagem("Não foi possível buscar esse local agora. Verifique a internet e tente de novo.", true);
+      $("btn-bairro").disabled = false;
     }
   }
 
-  btn.disabled = true;
-  $("btn-bairro").disabled = true;
-  btn.addEventListener("click", localizar);
   $("form-bairro").addEventListener("submit", (e) => {
     e.preventDefault();
     const texto = $("bairro").value.trim();
     if (texto) buscarPorBairro(texto);
   });
+
+  btn.addEventListener("click", localizar);
   document.querySelectorAll('input[name="tipo"]').forEach((r) =>
     r.addEventListener("change", () => { if (posicao && unidades.length) desenhar(); })
   );
-
-  iniciar();
 </script>
 </body>
 </html>
